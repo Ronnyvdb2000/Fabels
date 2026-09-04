@@ -2,7 +2,7 @@ name: Dagelijkse Actua Bot
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # 06:00 UTC, elke dag (nieuws stopt niet in het weekend)
+    - cron: '0 6 * * *'  # 06:00 UTC, elke dag
   workflow_dispatch:
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
 
       - name: Installeer dependencies
-        run: pip install requests feedparser yfinance
+        run: pip install -r requirements.txt
 
       - name: Run news bot
         env:
