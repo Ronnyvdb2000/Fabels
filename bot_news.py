@@ -1,7 +1,8 @@
 """
-news_bot.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest en oorlog/geopolitiek.
+bot_news.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest en oorlog/geopolitiek.
 Stuurt één Telegram-bericht per categorie naar een apart nieuwskanaal (NEWS_TELEGRAM_CHAT_ID),
 gescheiden van de aandelen-/tradingbots. Geen CSV-logging.
+Granen-categorie bevat ook de Belgische Fegra-tarweprijs (Synagra-notering).
 """
 
 import os
@@ -10,6 +11,7 @@ import smtplib
 import requests
 import feedparser
 import yfinance as yf
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -24,7 +26,9 @@ EMAIL_PASS = os.environ.get("EMAIL_PASS")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
 MAX_ITEMS_PER_CATEGORIE = 5
-NIEUWS_VENSTER_UUR = 30  # alleen artikels van de laatste 30 uur (dekt interval tussen runs + marge)
+NIEUWS_VENSTER_UUR = 30  # alleen artikels van de laatste 30 uur
+
+FEGRA_URL = "https://fegra.be/home/agriculturalprices"
 
 CATEGORIEEN = {
     "🌾 Granen": {
@@ -37,7 +41,7 @@ CATEGORIEEN = {
     },
     "🧪 Kunstmest": {
         "query": "(kunstmest OR fertilizer OR ureum OR urea OR potash OR fosfaat) prijs markt",
-        "tickers": {},  # geen betrouwbare directe future via yfinance
+        "tickers": {},
     },
     "⚔️ Oorlog & geopolitiek": {
         "query": "(oorlog OR geopolitiek OR conflict OR sancties) (grondstoffen OR olie OR graan OR energie)",
@@ -81,7 +85,7 @@ def haal_nieuws_op(query, max_items=MAX_ITEMS_PER_CATEGORIE):
     return artikels
 
 
-# ---------- Futuresprijzen ----------
+# ---------- Futuresprijzen (yfinance) ----------
 
 def haal_futures_prijzen_op(tickers: dict):
     """Geeft laatste slotkoers + %-verandering t.o.v. vorige sessie per ticker terug."""
@@ -100,15 +104,56 @@ def haal_futures_prijzen_op(tickers: dict):
     return resultaten
 
 
+# ---------- Fegra tarweprijs (Belgische markt) ----------
+
+def haal_fegra_tarweprijs_op():
+    """Scrapt de indicatieve tarweprijs (STANDAARD TARWE) van Fegra/Synagra."""
+    try:
+        resp = requests.get(FEGRA_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(resp.text, "html.parser")
+        tabel = soup.find("table")
+        if not tabel:
+            return {}
+
+        resultaten = {}
+        rijen = tabel.find_all("tr")
+        for rij in rijen[1:]:  # eerste rij = kolomkoppen (datums)
+            cellen = rij.find_all("td")
+            if len(cellen) < 3:
+                continue
+            label = cellen[0].get_text(strip=True)
+            if "TARWE" not in label.upper():
+                continue
+            try:
+                laatste = float(cellen[1].get_text(strip=True).replace(",", "."))
+                vorige = float(cellen[2].get_text(strip=True).replace(",", "."))
+                verandering = laatste - vorige
+                resultaten[label] = (laatste, verandering)
+            except (ValueError, IndexError):
+                continue
+
+        return resultaten
+    except Exception as e:
+        print(f"Fegra-scrape mislukt: {e}")
+        return {}
+
+
 # ---------- Berichten opbouwen ----------
 
-def bouw_categorie_bericht(naam, artikels, prijzen):
+def bouw_categorie_bericht(naam, artikels, prijzen, fegra_prijzen=None):
     regels = [f"<b>{naam}</b>", ""]
 
     if prijzen:
         for label, (koers, pct) in prijzen.items():
             pijl = "🔺" if pct >= 0 else "🔻"
             regels.append(f"{label}: {koers:.2f} ({pijl} {pct:+.2f}%)")
+        regels.append("")
+
+    if fegra_prijzen:
+        regels.append("<b>Fegra (BE, €/ton):</b>")
+        for label, (laatste, verandering) in fegra_prijzen.items():
+            pijl = "🔺" if verandering >= 0 else "🔻"
+            regels.append(f"{label}: {laatste:.1f} ({pijl} {verandering:+.1f})")
         regels.append("")
 
     if artikels:
@@ -178,7 +223,9 @@ def main():
     for naam, config in CATEGORIEEN.items():
         artikels = haal_nieuws_op(config["query"])
         prijzen = haal_futures_prijzen_op(config["tickers"])
-        bericht = bouw_categorie_bericht(naam, artikels, prijzen)
+        fegra_prijzen = haal_fegra_tarweprijs_op() if naam == "🌾 Granen" else None
+
+        bericht = bouw_categorie_bericht(naam, artikels, prijzen, fegra_prijzen)
         categorie_berichten[naam] = bericht
 
         verzonden = stuur_telegram(bericht)
