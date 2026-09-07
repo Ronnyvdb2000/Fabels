@@ -2,7 +2,8 @@
 bot_news.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest en oorlog/geopolitiek.
 Stuurt één Telegram-bericht per categorie naar een apart nieuwskanaal (NEWS_TELEGRAM_CHAT_ID),
 gescheiden van de aandelen-/tradingbots. Geen CSV-logging.
-Granen-categorie bevat ook de Belgische Fegra-tarweprijs (Synagra-notering).
+Granen-categorie bevat ook de Belgische Fegra-tarweprijs (Synagra-notering) en nieuws over
+de Belgapomnotering (aardappelen) via Google News.
 """
 
 import os
@@ -32,7 +33,7 @@ FEGRA_URL = "https://fegra.be/home/agriculturalprices"
 
 CATEGORIEEN = {
     "🌾 Granen": {
-        "query": "(tarwe OR mais OR sojabonen OR graanprijs OR wheat OR corn OR soybean) markt prijs",
+        "query": "(tarwe OR mais OR sojabonen OR graanprijs OR wheat OR corn OR soybean OR Belgapomnotering OR aardappelprijs) markt prijs",
         "tickers": {"Tarwe (ZW=F)": "ZW=F", "Mais (ZC=F)": "ZC=F", "Soja (ZS=F)": "ZS=F"},
     },
     "🛢️ Olie": {
@@ -113,6 +114,7 @@ def haal_fegra_tarweprijs_op():
         soup = BeautifulSoup(resp.text, "html.parser")
         tabel = soup.find("table")
         if not tabel:
+            print("Fegra: geen <table> gevonden op de pagina.")
             return {}
 
         resultaten = {}
@@ -223,7 +225,10 @@ def main():
     for naam, config in CATEGORIEEN.items():
         artikels = haal_nieuws_op(config["query"])
         prijzen = haal_futures_prijzen_op(config["tickers"])
+
         fegra_prijzen = haal_fegra_tarweprijs_op() if naam == "🌾 Granen" else None
+        if naam == "🌾 Granen":
+            print(f"Fegra-resultaat: {fegra_prijzen if fegra_prijzen else 'LEEG/MISLUKT'}")
 
         bericht = bouw_categorie_bericht(naam, artikels, prijzen, fegra_prijzen)
         categorie_berichten[naam] = bericht
