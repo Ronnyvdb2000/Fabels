@@ -2,7 +2,8 @@ name: Dagelijkse Actua Bot
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # 06:00 UTC, elke dag
+    - cron: '0 7 * * *'   # 09:00 Belgische tijd (zomertijd, UTC+2)
+    - cron: '0 13 * * *'  # 15:00 Belgische tijd (zomertijd, UTC+2)
   workflow_dispatch:
 
 jobs:
