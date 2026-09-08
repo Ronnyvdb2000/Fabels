@@ -2,3 +2,5 @@ requests
 feedparser
 yfinance
 beautifulsoup4
+pandas
+lxml
