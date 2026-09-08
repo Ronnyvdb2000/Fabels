@@ -1,9 +1,7 @@
 """
-bot_news.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest en oorlog/geopolitiek.
-Stuurt één Telegram-bericht per categorie naar een apart nieuwskanaal (NEWS_TELEGRAM_CHAT_ID),
-gescheiden van de aandelen-/tradingbots. Geen CSV-logging.
-Granen-categorie bevat ook de Belgische Fegra-tarweprijs (Synagra-notering) en nieuws over
-de Belgapomnotering (aardappelen) via Google News.
+bot_news.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest, oorlog/geopolitiek
+en vee/pluimveeprijzen. Stuurt één Telegram-bericht per categorie naar een apart nieuwskanaal
+(NEWS_TELEGRAM_CHAT_ID), gescheiden van de aandelen-/tradingbots. Geen CSV-logging.
 """
 
 import os
@@ -11,6 +9,7 @@ import time
 import smtplib
 import requests
 import feedparser
+import pandas as pd
 import yfinance as yf
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
@@ -20,16 +19,19 @@ from email.mime.multipart import MIMEMultipart
 # ---------- Configuratie ----------
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-NEWS_CHAT_ID = os.environ["NEWS_TELEGRAM_CHAT_ID"]  # apart kanaal, los van de tradingbots
+NEWS_CHAT_ID = os.environ["NEWS_TELEGRAM_CHAT_ID"]
 
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
 MAX_ITEMS_PER_CATEGORIE = 5
-NIEUWS_VENSTER_UUR = 30  # alleen artikels van de laatste 30 uur
+NIEUWS_VENSTER_UUR = 30
 
 FEGRA_URL = "https://fegra.be/home/agriculturalprices"
+VDA_VARKENS_URL = "https://www.vda-ooigem.be/nl/marktprijzen/varkens"
+VDA_EIEREN_URL = "https://www.vda-ooigem.be/nl/marktprijzen/eieren/eierprijzen-kruishoutem"
+DEINZE_KIPPEN_URL = "https://www.deinze.be/kippenprijzen"
 
 CATEGORIEEN = {
     "🌾 Granen": {
@@ -48,6 +50,10 @@ CATEGORIEEN = {
         "query": "(oorlog OR geopolitiek OR conflict OR sancties) (grondstoffen OR olie OR graan OR energie)",
         "tickers": {},
     },
+    "🐖 Vee & Pluimvee": {
+        "query": "(varkensprijs OR biggenprijs OR eierprijs OR pluimveeprijs OR vleesvarkens) markt",
+        "tickers": {},
+    },
 }
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=nl&gl=BE&ceid=BE:nl"
@@ -56,7 +62,6 @@ GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=nl&gl=BE&ceid
 # ---------- Nieuws ophalen ----------
 
 def haal_nieuws_op(query, max_items=MAX_ITEMS_PER_CATEGORIE):
-    """Haalt recente nieuwsartikels op via Google News RSS (gratis, geen API-key nodig)."""
     url = GOOGLE_NEWS_RSS.format(query=requests.utils.quote(query))
     feed = feedparser.parse(url)
 
@@ -89,7 +94,6 @@ def haal_nieuws_op(query, max_items=MAX_ITEMS_PER_CATEGORIE):
 # ---------- Futuresprijzen (yfinance) ----------
 
 def haal_futures_prijzen_op(tickers: dict):
-    """Geeft laatste slotkoers + %-verandering t.o.v. vorige sessie per ticker terug."""
     resultaten = {}
     for label, ticker in tickers.items():
         try:
@@ -105,7 +109,7 @@ def haal_futures_prijzen_op(tickers: dict):
     return resultaten
 
 
-# ---------- Fegra tarweprijs (Belgische markt) ----------
+# ---------- Fegra tarweprijs ----------
 
 def haal_fegra_tarweprijs_op():
     """Scrapt de indicatieve tarweprijs (STANDAARD TARWE) van Fegra/Synagra."""
@@ -119,7 +123,7 @@ def haal_fegra_tarweprijs_op():
 
         resultaten = {}
         rijen = tabel.find_all("tr")
-        for rij in rijen[1:]:  # eerste rij = kolomkoppen (datums)
+        for rij in rijen[1:]:
             cellen = rij.find_all("td")
             if len(cellen) < 3:
                 continue
@@ -140,9 +144,76 @@ def haal_fegra_tarweprijs_op():
         return {}
 
 
+# ---------- Varkens- en biggenprijzen (Vanden Avenne Ooigem) ----------
+
+def haal_varkensprijzen_op():
+    """Scrapt de meest recente week uit de VDA-varkenstabel."""
+    try:
+        resp = requests.get(VDA_VARKENS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        tabellen = pd.read_html(resp.text)
+        if not tabellen:
+            return {}
+        df = tabellen[0]
+        laatste_rij = df.iloc[0]  # meest recente week staat bovenaan
+        kolommen = df.columns.tolist()
+
+        resultaten = {"datum": str(laatste_rij[kolommen[1]])}
+        for kol in kolommen[2:]:
+            resultaten[str(kol)] = laatste_rij[kol]
+        return resultaten
+    except Exception as e:
+        print(f"Varkensprijzen-scrape mislukt: {e}")
+        return {}
+
+
+# ---------- Eierprijzen (Vanden Avenne Ooigem, Kruishoutem) ----------
+
+def haal_eierprijzen_op():
+    """Scrapt de meest recente week uit de bruinschalig-verrijkte-kooi tabel (eerste tabel op de pagina)."""
+    try:
+        resp = requests.get(VDA_EIEREN_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        tabellen = pd.read_html(resp.text)
+        if not tabellen:
+            return {}
+        df = tabellen[0]
+        laatste_rij = df.iloc[0]
+        kolommen = df.columns.tolist()
+
+        # kolom 0=Week, 1=Datum, rest = gewichtsklassen (bv. 62,5 gram)
+        gewichtsklasse = kolommen[3] if len(kolommen) > 3 else kolommen[-1]
+        return {
+            "datum": str(laatste_rij[kolommen[1]]),
+            "gewichtsklasse": str(gewichtsklasse),
+            "prijs": laatste_rij[gewichtsklasse],
+        }
+    except Exception as e:
+        print(f"Eierprijzen-scrape mislukt: {e}")
+        return {}
+
+
+# ---------- Slachtpluimveeprijzen (Stad Deinze) ----------
+
+def haal_kippenprijzen_op():
+    """Scrapt de meest recente prijzencommissie-tabel van Stad Deinze."""
+    try:
+        resp = requests.get(DEINZE_KIPPEN_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        tabellen = pd.read_html(resp.text)
+        if not tabellen:
+            return {}
+        df = tabellen[0]  # meest recente commissie staat als eerste tabel op de pagina
+        resultaten = {}
+        for _, rij in df.iterrows():
+            resultaten[str(rij.iloc[0])] = str(rij.iloc[1])
+        return resultaten
+    except Exception as e:
+        print(f"Kippenprijzen-scrape mislukt: {e}")
+        return {}
+
+
 # ---------- Berichten opbouwen ----------
 
-def bouw_categorie_bericht(naam, artikels, prijzen, fegra_prijzen=None):
+def bouw_categorie_bericht(naam, artikels, prijzen, extra_secties=None):
+    """extra_secties: lijst van (titel, [regels]) tuples, elk als eigen blok toegevoegd."""
     regels = [f"<b>{naam}</b>", ""]
 
     if prijzen:
@@ -151,12 +222,13 @@ def bouw_categorie_bericht(naam, artikels, prijzen, fegra_prijzen=None):
             regels.append(f"{label}: {koers:.2f} ({pijl} {pct:+.2f}%)")
         regels.append("")
 
-    if fegra_prijzen:
-        regels.append("<b>Fegra (BE, €/ton):</b>")
-        for label, (laatste, verandering) in fegra_prijzen.items():
-            pijl = "🔺" if verandering >= 0 else "🔻"
-            regels.append(f"{label}: {laatste:.1f} ({pijl} {verandering:+.1f})")
-        regels.append("")
+    if extra_secties:
+        for titel, sectie_regels in extra_secties:
+            if not sectie_regels:
+                continue
+            regels.append(f"<b>{titel}</b>")
+            regels.extend(sectie_regels)
+            regels.append("")
 
     if artikels:
         for a in artikels:
@@ -203,7 +275,7 @@ def stuur_email_samenvatting(categorie_berichten: dict):
 
     vandaag = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Dagelijkse actua: granen / olie / kunstmest / oorlog — {vandaag}"
+    msg["Subject"] = f"Dagelijkse actua: granen / olie / kunstmest / oorlog / vee — {vandaag}"
     msg["From"] = EMAIL_USER
     msg["To"] = EMAIL_RECEIVER
 
@@ -225,18 +297,46 @@ def main():
     for naam, config in CATEGORIEEN.items():
         artikels = haal_nieuws_op(config["query"])
         prijzen = haal_futures_prijzen_op(config["tickers"])
+        extra_secties = []
 
-        fegra_prijzen = haal_fegra_tarweprijs_op() if naam == "🌾 Granen" else None
         if naam == "🌾 Granen":
+            fegra_prijzen = haal_fegra_tarweprijs_op()
             print(f"Fegra-resultaat: {fegra_prijzen if fegra_prijzen else 'LEEG/MISLUKT'}")
+            if fegra_prijzen:
+                regels = [
+                    f"{label}: {laatste:.1f} ({'🔺' if verandering >= 0 else '🔻'} {verandering:+.1f})"
+                    for label, (laatste, verandering) in fegra_prijzen.items()
+                ]
+                extra_secties.append(("Fegra tarwe (BE, €/ton)", regels))
 
-        bericht = bouw_categorie_bericht(naam, artikels, prijzen, fegra_prijzen)
+        if naam == "🐖 Vee & Pluimvee":
+            varkens = haal_varkensprijzen_op()
+            print(f"Varkensprijzen-resultaat: {varkens if varkens else 'LEEG/MISLUKT'}")
+            if varkens:
+                regels = [f"{k}: {v}" for k, v in varkens.items() if k != "datum"]
+                titel = f"Varkens/Biggen (VDA, week van {varkens.get('datum', '?')})"
+                extra_secties.append((titel, regels))
+
+            eieren = haal_eierprijzen_op()
+            print(f"Eierprijzen-resultaat: {eieren if eieren else 'LEEG/MISLUKT'}")
+            if eieren:
+                titel = f"Eieren verrijkte kooi (VDA, week van {eieren.get('datum', '?')})"
+                regel = [f"Klasse {eieren.get('gewichtsklasse', '?')}g: {eieren.get('prijs', '?')} €/100 st."]
+                extra_secties.append((titel, regel))
+
+            kippen = haal_kippenprijzen_op()
+            print(f"Kippenprijzen-resultaat: {kippen if kippen else 'LEEG/MISLUKT'}")
+            if kippen:
+                regels = [f"{k}: {v}" for k, v in kippen.items()]
+                extra_secties.append(("Slachtpluimvee (Deinze)", regels))
+
+        bericht = bouw_categorie_bericht(naam, artikels, prijzen, extra_secties)
         categorie_berichten[naam] = bericht
 
         verzonden = stuur_telegram(bericht)
         print(f"{naam}: {'verzonden' if verzonden else 'MISLUKT'} ({len(artikels)} artikels)")
 
-        time.sleep(1)  # kleine pauze tussen berichten
+        time.sleep(1)
 
     stuur_email_samenvatting(categorie_berichten)
 
