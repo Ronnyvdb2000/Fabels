@@ -1,4 +1,4 @@
-"""
+0"""
 bot_news.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest, oorlog/geopolitiek
 en vee/pluimveeprijzen. Stuurt één Telegram-bericht per categorie naar een apart nieuwskanaal
 (NEWS_TELEGRAM_CHAT_ID), gescheiden van de aandelen-/tradingbots. Geen CSV-logging.
@@ -159,13 +159,16 @@ def haal_aardappelprijs_op():
             timeout=15,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
         )
+        alle_links = re.findall(r'href="([^"]+)"', resp.text)
+        relevante = [l for l in alle_links if "marktbericht" in l.lower() or "belgapom" in l.lower() or "aardappel" in l.lower()]
+        print(f"Diagnose Viaverda: status={resp.status_code}, lengte={len(resp.text)}, {len(alle_links)} links totaal, relevante links: {relevante[:10]}")
+
         links = re.findall(
             r'href="(/Detail/[^"]*(?:marktbericht-viaverdafiwap|belgapomnotering)[^"]*)"',
             resp.text,
             re.IGNORECASE,
         )
         if not links:
-            print("Aardappelprijzen (Viaverda): geen artikellink gevonden op categoriepagina.")
             return {}
 
         artikel_url = "https://www.viaverda.be" + links[0]
