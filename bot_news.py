@@ -30,10 +30,10 @@ MAX_ITEMS_PER_CATEGORIE = 5
 NIEUWS_VENSTER_UUR = 30
 
 FEGRA_URL = "https://fegra.be/home/agriculturalprices"
+VIAVERDA_URL = "https://www.viaverda.be/Detail/category/marktberichten"
 VDA_VARKENS_URL = "https://www.vda-ooigem.be/nl/marktprijzen/varkens"
 VDA_EIEREN_URL = "https://www.vda-ooigem.be/nl/marktprijzen/eieren/eierprijzen-kruishoutem"
 DEINZE_KIPPEN_URL = "https://www.deinze.be/kippenprijzen"
-VIAVERDA_URL = "https://www.viaverda.be/Detail/category/marktberichten"
 
 MAANDEN_NL = ["januari", "februari", "maart", "april", "mei", "juni",
               "juli", "augustus", "september", "oktober", "november", "december"]
@@ -149,6 +149,34 @@ def haal_fegra_tarweprijs_op():
         return {}
 
 
+# ---------- Aardappelprijzen (Viaverda — herpubliceert ook Belgapomnotering) ----------
+
+def haal_aardappelprijs_op():
+    """Scrapt het meest recente Viaverda-bericht (bevat ook Belgapomnotering-cijfers als tekst)."""
+    try:
+        resp = requests.get(VIAVERDA_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(resp.text, "html.parser")
+        tekst = soup.get_text("\n")
+
+        maanden_patroon = "|".join(MAANDEN_NL)
+        patroon = re.compile(
+            r"(\d{1,2}\s+(?:" + maanden_patroon + r")\s+\d{4})\s*-\s*(.+?)"
+            r"(?=\n\d{1,2}\s+(?:" + maanden_patroon + r")\s+\d{4}\s*-|\Z)",
+            re.DOTALL,
+        )
+        match = patroon.search(tekst)
+        if not match:
+            print("Aardappelprijzen (Viaverda): geen berichtblok gevonden.")
+            return {}
+
+        datum_str, inhoud = match.groups()
+        inhoud = " ".join(inhoud.split())[:400]
+        return {"datum": datum_str.strip(), "tekst": inhoud}
+    except Exception as e:
+        print(f"Aardappelprijzen-scrape (Viaverda) mislukt: {e}")
+        return {}
+
+
 # ---------- Varkens- en biggenprijzen (Vanden Avenne Ooigem) ----------
 
 def haal_varkensprijzen_op():
@@ -159,7 +187,7 @@ def haal_varkensprijzen_op():
         if not tabellen:
             return {}
         df = tabellen[0]
-        laatste_rij = df.iloc[0]  # meest recente week staat bovenaan
+        laatste_rij = df.iloc[0]
         kolommen = df.columns.tolist()
 
         resultaten = {"datum": str(laatste_rij[kolommen[1]])}
@@ -184,7 +212,6 @@ def haal_eierprijzen_op():
         laatste_rij = df.iloc[0]
         kolommen = df.columns.tolist()
 
-        # kolom 0=Week, 1=Datum, rest = gewichtsklassen (bv. 62,5 gram)
         gewichtsklasse = kolommen[3] if len(kolommen) > 3 else kolommen[-1]
         return {
             "datum": str(laatste_rij[kolommen[1]]),
@@ -205,7 +232,7 @@ def haal_kippenprijzen_op():
         tabellen = pd.read_html(resp.text)
         if not tabellen:
             return {}
-        df = tabellen[0]  # meest recente commissie staat als eerste tabel op de pagina
+        df = tabellen[0]
         resultaten = {}
         for _, rij in df.iterrows():
             resultaten[str(rij.iloc[0])] = str(rij.iloc[1])
@@ -313,6 +340,12 @@ def main():
                     for label, (laatste, verandering) in fegra_prijzen.items()
                 ]
                 extra_secties.append(("Fegra tarwe (BE, €/ton)", regels))
+
+            aardappel = haal_aardappelprijs_op()
+            print(f"Aardappelprijzen-resultaat: {aardappel if aardappel else 'LEEG/MISLUKT'}")
+            if aardappel:
+                titel = f"Aardappelen (Viaverda/Belgapom, {aardappel.get('datum', '?')})"
+                extra_secties.append((titel, [aardappel.get("tekst", "")]))
 
         if naam == "🐖 Vee & Pluimvee":
             varkens = haal_varkensprijzen_op()
