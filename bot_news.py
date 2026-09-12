@@ -153,31 +153,35 @@ def haal_fegra_tarweprijs_op():
 # ---------- Aardappelprijzen (Viaverda — herpubliceert ook Belgapomnotering) ----------
 
 def haal_aardappelprijs_op():
-    """Scrapt het meest recente Viaverda-bericht (bevat ook Belgapomnotering-cijfers als tekst)."""
+    """Zoekt het meest recente Viaverda-marktbericht over aardappelen via Google News."""
     try:
-        resp = requests.get(VIAVERDA_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(resp.text, "html.parser")
-        tekst = soup.get_text("\n")
-
-        maanden_patroon = "|".join(MAANDEN_NL)
-        patroon = re.compile(
-            r"(\d{1,2}\s+(?:" + maanden_patroon + r")\s+\d{4})\s*-\s*(.+?)"
-            r"(?=\n\d{1,2}\s+(?:" + maanden_patroon + r")\s+\d{4}\s*-|\Z)",
-            re.DOTALL,
-        )
-        match = patroon.search(tekst)
-        if not match:
-            print("Aardappelprijzen (Viaverda): geen berichtblok gevonden.")
+        query = "site:viaverda.be (Marktbericht VIAVERDAFIWAP OR Belgapomnotering)"
+        url = GOOGLE_NEWS_RSS.format(query=requests.utils.quote(query))
+        feed = feedparser.parse(url)
+        if not feed.entries:
+            print("Aardappelprijzen (Viaverda): geen artikel gevonden via Google News.")
             return {}
 
-        datum_str, inhoud = match.groups()
-        inhoud = re.split(r"Aardappelen\s+Marktberichten", inhoud)[0]
-        inhoud = " ".join(inhoud.split())[:400]
-        return {"datum": datum_str.strip(), "tekst": inhoud}
+        entry = feed.entries[0]
+        artikel_datum = None
+        try:
+            artikel_datum = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+        except (AttributeError, TypeError):
+            pass
+
+        resp = requests.get(entry.link, timeout=15, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        paragrafen = [p.get_text(strip=True) for p in soup.find_all("p")]
+        tekst = " ".join(p for p in paragrafen if p)
+        tekst = " ".join(tekst.split())[:400]
+
+        return {
+            "datum": artikel_datum.strftime("%d/%m/%Y") if artikel_datum else entry.title,
+            "tekst": tekst,
+        }
     except Exception as e:
         print(f"Aardappelprijzen-scrape (Viaverda) mislukt: {e}")
         return {}
-
 
 # ---------- Varkens- en biggenprijzen (Vanden Avenne Ooigem) ----------
 
