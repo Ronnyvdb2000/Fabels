@@ -31,13 +31,9 @@ MAX_ITEMS_PER_CATEGORIE = 5
 NIEUWS_VENSTER_UUR = 30
 
 FEGRA_URL = "https://fegra.be/home/agriculturalprices"
-VIAVERDA_URL = "https://www.viaverda.be/Detail/category/marktberichten"
 VDA_VARKENS_URL = "https://www.vda-ooigem.be/nl/marktprijzen/varkens"
 VDA_EIEREN_URL = "https://www.vda-ooigem.be/nl/marktprijzen/eieren/eierprijzen-kruishoutem"
 DEINZE_KIPPEN_URL = "https://www.deinze.be/kippenprijzen"
-
-MAANDEN_NL = ["januari", "februari", "maart", "april", "mei", "juni",
-              "juli", "augustus", "september", "oktober", "november", "december"]
 
 CATEGORIEEN = {
     "🌾 Granen": {
@@ -150,7 +146,7 @@ def haal_fegra_tarweprijs_op():
         return {}
 
 
-# ---------- Aardappelprijzen (Viaverda — herpubliceert ook Belgapomnotering) ----------
+# ---------- Aardappelprijzen (via Google News → Viaverda-artikel) ----------
 
 def haal_aardappelprijs_op():
     """Zoekt het meest recente Viaverda-marktbericht over aardappelen via Google News."""
@@ -169,11 +165,25 @@ def haal_aardappelprijs_op():
         except (AttributeError, TypeError):
             pass
 
-        resp = requests.get(entry.link, timeout=15, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
+        resp = requests.get(
+            entry.link, timeout=15, allow_redirects=True,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept-Language": "nl-BE,nl;q=0.9",
+            },
+        )
+        print(f"Diagnose aardappel-URL na redirect: {resp.url}")
+
         soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "header", "footer"]):
+            tag.decompose()
+
         paragrafen = [p.get_text(strip=True) for p in soup.find_all("p")]
         tekst = " ".join(p for p in paragrafen if p)
+        if not tekst:
+            tekst = soup.get_text(" ", strip=True)
         tekst = " ".join(tekst.split())[:400]
+        print(f"Diagnose aardappel-tekstlengte: {len(tekst)}")
 
         return {
             "datum": artikel_datum.strftime("%d/%m/%Y") if artikel_datum else entry.title,
@@ -183,12 +193,17 @@ def haal_aardappelprijs_op():
         print(f"Aardappelprijzen-scrape (Viaverda) mislukt: {e}")
         return {}
 
+
 # ---------- Varkens- en biggenprijzen (Vanden Avenne Ooigem) ----------
 
 def haal_varkensprijzen_op():
     """Scrapt de meest recente week uit de VDA-varkenstabel."""
     try:
         resp = requests.get(VDA_VARKENS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        if "<table" not in resp.text.lower():
+            print(f"Diagnose varkens {resp.url}: status={resp.status_code}, lengte={len(resp.text)}, eerste 200 tekens: {resp.text[:200]!r}")
+            return {}
+
         tabellen = pd.read_html(StringIO(resp.text))
         if not tabellen:
             return {}
@@ -211,6 +226,10 @@ def haal_eierprijzen_op():
     """Scrapt de meest recente week uit de bruinschalig-verrijkte-kooi tabel (eerste tabel op de pagina)."""
     try:
         resp = requests.get(VDA_EIEREN_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        if "<table" not in resp.text.lower():
+            print(f"Diagnose eieren {resp.url}: status={resp.status_code}, lengte={len(resp.text)}, eerste 200 tekens: {resp.text[:200]!r}")
+            return {}
+
         tabellen = pd.read_html(StringIO(resp.text))
         if not tabellen:
             return {}
