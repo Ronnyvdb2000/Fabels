@@ -5,6 +5,7 @@ en vee/pluimveeprijzen. Stuurt één Telegram-bericht per categorie naar een apa
 """
 
 import os
+import re
 import time
 import smtplib
 import requests
@@ -32,6 +33,10 @@ FEGRA_URL = "https://fegra.be/home/agriculturalprices"
 VDA_VARKENS_URL = "https://www.vda-ooigem.be/nl/marktprijzen/varkens"
 VDA_EIEREN_URL = "https://www.vda-ooigem.be/nl/marktprijzen/eieren/eierprijzen-kruishoutem"
 DEINZE_KIPPEN_URL = "https://www.deinze.be/kippenprijzen"
+VIAVERDA_URL = "https://www.viaverda.be/Detail/category/marktberichten"
+
+MAANDEN_NL = ["januari", "februari", "maart", "april", "mei", "juni",
+              "juli", "augustus", "september", "oktober", "november", "december"]
 
 CATEGORIEEN = {
     "🌾 Granen": {
