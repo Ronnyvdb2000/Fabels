@@ -12,6 +12,7 @@ import requests
 import feedparser
 import pandas as pd
 import yfinance as yf
+from io import StringIO
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
@@ -170,6 +171,7 @@ def haal_aardappelprijs_op():
             return {}
 
         datum_str, inhoud = match.groups()
+        inhoud = re.split(r"Aardappelen\s+Marktberichten", inhoud)[0]
         inhoud = " ".join(inhoud.split())[:400]
         return {"datum": datum_str.strip(), "tekst": inhoud}
     except Exception as e:
@@ -183,7 +185,7 @@ def haal_varkensprijzen_op():
     """Scrapt de meest recente week uit de VDA-varkenstabel."""
     try:
         resp = requests.get(VDA_VARKENS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        tabellen = pd.read_html(resp.text)
+        tabellen = pd.read_html(StringIO(resp.text))
         if not tabellen:
             return {}
         df = tabellen[0]
@@ -205,7 +207,7 @@ def haal_eierprijzen_op():
     """Scrapt de meest recente week uit de bruinschalig-verrijkte-kooi tabel (eerste tabel op de pagina)."""
     try:
         resp = requests.get(VDA_EIEREN_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        tabellen = pd.read_html(resp.text)
+        tabellen = pd.read_html(StringIO(resp.text))
         if not tabellen:
             return {}
         df = tabellen[0]
@@ -229,7 +231,7 @@ def haal_kippenprijzen_op():
     """Scrapt de meest recente prijzencommissie-tabel van Stad Deinze."""
     try:
         resp = requests.get(DEINZE_KIPPEN_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        tabellen = pd.read_html(resp.text)
+        tabellen = pd.read_html(StringIO(resp.text))
         if not tabellen:
             return {}
         df = tabellen[0]
