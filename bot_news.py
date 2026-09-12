@@ -2,6 +2,10 @@
 bot_news.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest, oorlog/geopolitiek
 en vee/pluimveeprijzen. Stuurt één Telegram-bericht per categorie naar een apart nieuwskanaal
 (NEWS_TELEGRAM_CHAT_ID), gescheiden van de aandelen-/tradingbots. Geen CSV-logging.
+
+Varkens-, biggen- en eierprijzen worden NIET rechtstreeks gescrapet (alle geteste bronnen
+zijn JavaScript-gerenderd en dus niet bereikbaar met requests/pandas) — deze komen enkel
+binnen via de nieuwszoekopdracht van de "Vee & Pluimvee"-categorie.
 """
 
 import os
@@ -31,8 +35,7 @@ MAX_ITEMS_PER_CATEGORIE = 5
 NIEUWS_VENSTER_UUR = 30
 
 FEGRA_URL = "https://fegra.be/home/agriculturalprices"
-VDA_VARKENS_URL = "https://www.vda-ooigem.be/nl/marktprijzen/varkens"
-VDA_EIEREN_URL = "https://www.vda-ooigem.be/nl/marktprijzen/eieren/eierprijzen-kruishoutem"
+VIAVERDA_CATEGORIE_URL = "https://www.viaverda.be/Detail/category/marktberichten"
 DEINZE_KIPPEN_URL = "https://www.deinze.be/kippenprijzen"
 
 CATEGORIEEN = {
@@ -53,7 +56,7 @@ CATEGORIEEN = {
         "tickers": {},
     },
     "🐖 Vee & Pluimvee": {
-        "query": "(varkensprijs OR biggenprijs OR eierprijs OR pluimveeprijs OR vleesvarkens) markt",
+        "query": "(varkensprijs OR biggenprijs OR eierprijs OR pluimveeprijs OR vleesvarkens OR Vlaamse biggenprijs) markt",
         "tickers": {},
     },
 }
@@ -146,105 +149,43 @@ def haal_fegra_tarweprijs_op():
         return {}
 
 
-# ---------- Aardappelprijzen (via Google News → Viaverda-artikel) ----------
+# ---------- Aardappelprijzen (Viaverda — herpubliceert ook Belgapomnotering) ----------
 
 def haal_aardappelprijs_op():
-    """Zoekt het meest recente Viaverda-marktbericht over aardappelen via Google News."""
+    """Zoekt het meest recente Viaverda-marktbericht via de eigen categoriepagina (link-patroon)."""
     try:
-        query = "site:viaverda.be (Marktbericht VIAVERDAFIWAP OR Belgapomnotering)"
-        url = GOOGLE_NEWS_RSS.format(query=requests.utils.quote(query))
-        feed = feedparser.parse(url)
-        if not feed.entries:
-            print("Aardappelprijzen (Viaverda): geen artikel gevonden via Google News.")
+        resp = requests.get(
+            VIAVERDA_CATEGORIE_URL,
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+        )
+        links = re.findall(
+            r'href="(/Detail/[^"]*(?:marktbericht-viaverdafiwap|belgapomnotering)[^"]*)"',
+            resp.text,
+            re.IGNORECASE,
+        )
+        if not links:
+            print("Aardappelprijzen (Viaverda): geen artikellink gevonden op categoriepagina.")
             return {}
 
-        entry = feed.entries[0]
-        artikel_datum = None
-        try:
-            artikel_datum = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-        except (AttributeError, TypeError):
-            pass
-
-        resp = requests.get(
-            entry.link, timeout=15, allow_redirects=True,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept-Language": "nl-BE,nl;q=0.9",
-            },
-        )
-        print(f"Diagnose aardappel-URL na redirect: {resp.url}")
-
-        soup = BeautifulSoup(resp.text, "html.parser")
+        artikel_url = "https://www.viaverda.be" + links[0]
+        resp2 = requests.get(artikel_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(resp2.text, "html.parser")
         for tag in soup(["script", "style", "nav", "header", "footer"]):
             tag.decompose()
-
         paragrafen = [p.get_text(strip=True) for p in soup.find_all("p")]
         tekst = " ".join(p for p in paragrafen if p)
-        if not tekst:
-            tekst = soup.get_text(" ", strip=True)
         tekst = " ".join(tekst.split())[:400]
-        print(f"Diagnose aardappel-tekstlengte: {len(tekst)}")
 
-        return {
-            "datum": artikel_datum.strftime("%d/%m/%Y") if artikel_datum else entry.title,
-            "tekst": tekst,
-        }
+        datum_match = re.search(r"(\d{6})/?$", artikel_url.rstrip("/"))
+        datum_str = datum_match.group(1) if datum_match else "onbekend"
+        if len(datum_str) == 6:
+            datum_str = f"{datum_str[0:2]}/{datum_str[2:4]}/20{datum_str[4:6]}"
+
+        print(f"Aardappel-artikel gevonden: {artikel_url}")
+        return {"datum": datum_str, "tekst": tekst}
     except Exception as e:
         print(f"Aardappelprijzen-scrape (Viaverda) mislukt: {e}")
-        return {}
-
-
-# ---------- Varkens- en biggenprijzen (Vanden Avenne Ooigem) ----------
-
-def haal_varkensprijzen_op():
-    """Scrapt de meest recente week uit de VDA-varkenstabel."""
-    try:
-        resp = requests.get(VDA_VARKENS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        if "<table" not in resp.text.lower():
-            print(f"Diagnose varkens {resp.url}: status={resp.status_code}, lengte={len(resp.text)}, eerste 200 tekens: {resp.text[:200]!r}")
-            return {}
-
-        tabellen = pd.read_html(StringIO(resp.text))
-        if not tabellen:
-            return {}
-        df = tabellen[0]
-        laatste_rij = df.iloc[0]
-        kolommen = df.columns.tolist()
-
-        resultaten = {"datum": str(laatste_rij[kolommen[1]])}
-        for kol in kolommen[2:]:
-            resultaten[str(kol)] = laatste_rij[kol]
-        return resultaten
-    except Exception as e:
-        print(f"Varkensprijzen-scrape mislukt: {e}")
-        return {}
-
-
-# ---------- Eierprijzen (Vanden Avenne Ooigem, Kruishoutem) ----------
-
-def haal_eierprijzen_op():
-    """Scrapt de meest recente week uit de bruinschalig-verrijkte-kooi tabel (eerste tabel op de pagina)."""
-    try:
-        resp = requests.get(VDA_EIEREN_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        if "<table" not in resp.text.lower():
-            print(f"Diagnose eieren {resp.url}: status={resp.status_code}, lengte={len(resp.text)}, eerste 200 tekens: {resp.text[:200]!r}")
-            return {}
-
-        tabellen = pd.read_html(StringIO(resp.text))
-        if not tabellen:
-            return {}
-        df = tabellen[0]
-        laatste_rij = df.iloc[0]
-        kolommen = df.columns.tolist()
-
-        gewichtsklasse = kolommen[3] if len(kolommen) > 3 else kolommen[-1]
-        return {
-            "datum": str(laatste_rij[kolommen[1]]),
-            "gewichtsklasse": str(gewichtsklasse),
-            "prijs": laatste_rij[gewichtsklasse],
-        }
-    except Exception as e:
-        print(f"Eierprijzen-scrape mislukt: {e}")
         return {}
 
 
@@ -373,20 +314,6 @@ def main():
                 extra_secties.append((titel, [aardappel.get("tekst", "")]))
 
         if naam == "🐖 Vee & Pluimvee":
-            varkens = haal_varkensprijzen_op()
-            print(f"Varkensprijzen-resultaat: {varkens if varkens else 'LEEG/MISLUKT'}")
-            if varkens:
-                regels = [f"{k}: {v}" for k, v in varkens.items() if k != "datum"]
-                titel = f"Varkens/Biggen (VDA, week van {varkens.get('datum', '?')})"
-                extra_secties.append((titel, regels))
-
-            eieren = haal_eierprijzen_op()
-            print(f"Eierprijzen-resultaat: {eieren if eieren else 'LEEG/MISLUKT'}")
-            if eieren:
-                titel = f"Eieren verrijkte kooi (VDA, week van {eieren.get('datum', '?')})"
-                regel = [f"Klasse {eieren.get('gewichtsklasse', '?')}g: {eieren.get('prijs', '?')} €/100 st."]
-                extra_secties.append((titel, regel))
-
             kippen = haal_kippenprijzen_op()
             print(f"Kippenprijzen-resultaat: {kippen if kippen else 'LEEG/MISLUKT'}")
             if kippen:
