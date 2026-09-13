@@ -2,9 +2,6 @@
 bot_news.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest, oorlog/geopolitiek
 en vee/pluimveeprijzen. Stuurt één Telegram-bericht per categorie naar een apart nieuwskanaal
 (NEWS_TELEGRAM_CHAT_ID), gescheiden van de aandelen-/tradingbots. Geen CSV-logging.
-
-Eierprijzen worden NIET rechtstreeks gescrapet (alle geteste bronnen zijn JavaScript-gerenderd)
-— deze komen enkel binnen via de nieuwszoekopdracht van de "Vee & Pluimvee"-categorie.
 """
 
 import os
@@ -37,6 +34,7 @@ FEGRA_URL = "https://fegra.be/home/agriculturalprices"
 VIAVERDA_CATEGORIE_URL = "https://www.viaverda.be/Detail/category/marktberichten"
 DEINZE_KIPPEN_URL = "https://www.deinze.be/kippenprijzen"
 VOEDERSDEGRAVE_VARKENS_URL = "https://www.voedersdegrave.be/varkensprijzen"
+LANDBOUWLEVEN_EIEREN_URL = "https://www.landbouwleven.be/markten/eieren/kruishoutem-scharreleieren-handelsnoteringen-bruine-eieren-57-5-g-m"
 
 CATEGORIEEN = {
     "🌾 Granen": {
@@ -220,6 +218,31 @@ def haal_varkensprijzen_op():
         return {}
 
 
+# ---------- Eierprijzen (Landbouwleven — Kruisem-notering) ----------
+
+def haal_eierprijs_op():
+    """Scrapt de actuele bruine-scharrelei-prijs (57,5g M, Kruisem) van Landbouwleven."""
+    try:
+        resp = requests.get(LANDBOUWLEVEN_EIEREN_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(resp.text, "html.parser")
+        tekst = soup.get_text("\n")
+
+        match = re.search(r"Prijs op (\d{2}/\d{2}/\d{4})\s*\n+\s*([\d,]+)€\s*([+-][\d,]+)\s*%", tekst)
+        if not match:
+            print("Eierprijs (Landbouwleven): geen prijs gevonden op de pagina.")
+            return {}
+
+        datum, prijs, verandering_pct = match.groups()
+        return {
+            "datum": datum,
+            "prijs": prijs.replace(",", "."),
+            "verandering_pct": verandering_pct.replace(",", "."),
+        }
+    except Exception as e:
+        print(f"Eierprijs-scrape (Landbouwleven) mislukt: {e}")
+        return {}
+
+
 # ---------- Slachtpluimveeprijzen (Stad Deinze) ----------
 
 def haal_kippenprijzen_op():
@@ -351,6 +374,13 @@ def main():
                 regels = [f"{k}: {v}" for k, v in varkens.items() if k not in ("week", "datum")]
                 titel = f"Varkens/Biggen (Voedersdegrave, week {varkens.get('week', '?')}, {varkens.get('datum', '?')})"
                 extra_secties.append((titel, regels))
+
+            eieren = haal_eierprijs_op()
+            print(f"Eierprijs-resultaat: {eieren if eieren else 'LEEG/MISLUKT'}")
+            if eieren:
+                titel = f"Bruine scharreleieren 57,5g (Kruisem, {eieren.get('datum', '?')})"
+                regel = [f"€{eieren.get('prijs', '?')} /100 stuks ({eieren.get('verandering_pct', '?')}%)"]
+                extra_secties.append((titel, regel))
 
             kippen = haal_kippenprijzen_op()
             print(f"Kippenprijzen-resultaat: {kippen if kippen else 'LEEG/MISLUKT'}")
