@@ -3,9 +3,8 @@ bot_news.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest, oorlog
 en vee/pluimveeprijzen. Stuurt één Telegram-bericht per categorie naar een apart nieuwskanaal
 (NEWS_TELEGRAM_CHAT_ID), gescheiden van de aandelen-/tradingbots. Geen CSV-logging.
 
-Varkens-, biggen- en eierprijzen worden NIET rechtstreeks gescrapet (alle geteste bronnen
-zijn JavaScript-gerenderd en dus niet bereikbaar met requests/pandas) — deze komen enkel
-binnen via de nieuwszoekopdracht van de "Vee & Pluimvee"-categorie.
+Eierprijzen worden NIET rechtstreeks gescrapet (alle geteste bronnen zijn JavaScript-gerenderd)
+— deze komen enkel binnen via de nieuwszoekopdracht van de "Vee & Pluimvee"-categorie.
 """
 
 import os
@@ -37,6 +36,7 @@ NIEUWS_VENSTER_UUR = 30
 FEGRA_URL = "https://fegra.be/home/agriculturalprices"
 VIAVERDA_CATEGORIE_URL = "https://www.viaverda.be/Detail/category/marktberichten"
 DEINZE_KIPPEN_URL = "https://www.deinze.be/kippenprijzen"
+VOEDERSDEGRAVE_VARKENS_URL = "https://www.voedersdegrave.be/varkensprijzen"
 
 CATEGORIEEN = {
     "🌾 Granen": {
@@ -189,6 +189,37 @@ def haal_aardappelprijs_op():
         return {}
 
 
+# ---------- Varkens- en biggenprijzen (Voedersdegrave) ----------
+
+def haal_varkensprijzen_op():
+    """Scrapt de meest recente week uit het Voedersdegrave-overzicht (BPG, Vanlandschoot, Vlaamse Biggenprijs)."""
+    try:
+        resp = requests.get(VOEDERSDEGRAVE_VARKENS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        tabellen = pd.read_html(StringIO(resp.text))
+        if not tabellen:
+            return {}
+
+        overzicht = None
+        for df in tabellen:
+            kolommen = [str(k).strip() for k in df.columns]
+            if "Week" in kolommen and "Datum" in kolommen:
+                overzicht = df
+                break
+        if overzicht is None:
+            print("Voedersdegrave: geen overzichtstabel gevonden.")
+            return {}
+
+        laatste_rij = overzicht.iloc[0]
+        resultaten = {"week": str(laatste_rij["Week"]), "datum": str(laatste_rij["Datum"])}
+        for kol in overzicht.columns:
+            if kol not in ("Week", "Datum"):
+                resultaten[str(kol)] = laatste_rij[kol]
+        return resultaten
+    except Exception as e:
+        print(f"Varkensprijzen-scrape (Voedersdegrave) mislukt: {e}")
+        return {}
+
+
 # ---------- Slachtpluimveeprijzen (Stad Deinze) ----------
 
 def haal_kippenprijzen_op():
@@ -314,6 +345,13 @@ def main():
                 extra_secties.append((titel, [aardappel.get("tekst", "")]))
 
         if naam == "🐖 Vee & Pluimvee":
+            varkens = haal_varkensprijzen_op()
+            print(f"Varkensprijzen-resultaat: {varkens if varkens else 'LEEG/MISLUKT'}")
+            if varkens:
+                regels = [f"{k}: {v}" for k, v in varkens.items() if k not in ("week", "datum")]
+                titel = f"Varkens/Biggen (Voedersdegrave, week {varkens.get('week', '?')}, {varkens.get('datum', '?')})"
+                extra_secties.append((titel, regels))
+
             kippen = haal_kippenprijzen_op()
             print(f"Kippenprijzen-resultaat: {kippen if kippen else 'LEEG/MISLUKT'}")
             if kippen:
