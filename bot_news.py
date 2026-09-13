@@ -233,6 +233,10 @@ def _scrape_landbouwleven_prijs(url, spanpatroon=None):
         soup = BeautifulSoup(resp.text, "html.parser")
         regels = [r.strip() for r in soup.get_text("\n").split("\n") if r.strip()]
 
+        if not any("Prijs op" in r for r in regels):
+            print(f"Diagnose {url}: 'Prijs op' NIET aanwezig in ruwe HTML — lengte={len(resp.text)}, status={resp.status_code}")
+
+        for i, regel in enumerate(regels):
         for i, regel in enumerate(regels):
             match_datum = re.match(r"Prijs op ([\d/\s–-]+)", regel)
             if not match_datum:
