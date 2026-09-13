@@ -28,7 +28,7 @@ EMAIL_PASS = os.environ.get("EMAIL_PASS")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
 MAX_ITEMS_PER_CATEGORIE = 5
-NIEUWS_VENSTER_UUR = 30
+NIEUWS_VENSTER_UUR = 48
 
 FEGRA_URL = "https://fegra.be/home/agriculturalprices"
 VIAVERDA_CATEGORIE_URL = "https://www.viaverda.be/Detail/category/marktberichten"
@@ -48,11 +48,11 @@ CATEGORIEEN = {
         "tickers": {"WTI (CL=F)": "CL=F", "Brent (BZ=F)": "BZ=F", "Aardgas (NG=F)": "NG=F"},
     },
     "🧪 Kunstmest": {
-        "query": "(kunstmest OR fertilizer OR ureum OR urea OR potash OR fosfaat) prijs markt",
+        "query": "(kunstmest OR fertilizer OR ureum OR urea OR potash OR fosfaat OR Yara OR ammoniak OR stikstofmeststof OR NPK) prijs OR markt OR productie",
         "tickers": {},
     },
     "⚔️ Oorlog & geopolitiek": {
-        "query": "(oorlog OR geopolitiek OR conflict OR sancties) (grondstoffen OR olie OR graan OR energie)",
+        "query": "(oorlog OR Oekraïne OR Rusland OR Gaza OR Midden-Oosten OR sancties OR conflict) (grondstoffen OR olie OR graan OR energie OR export OR handel)",
         "tickers": {},
     },
     "🐖 Vee & Pluimvee": {
@@ -236,7 +236,6 @@ def _scrape_landbouwleven_prijs(url, spanpatroon=None):
         if not any("Prijs op" in r for r in regels):
             print(f"Diagnose {url}: 'Prijs op' NIET aanwezig in ruwe HTML — lengte={len(resp.text)}, status={resp.status_code}")
 
-        for i, regel in enumerate(regels):
         for i, regel in enumerate(regels):
             match_datum = re.match(r"Prijs op ([\d/\s–-]+)", regel)
             if not match_datum:
