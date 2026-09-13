@@ -35,6 +35,8 @@ VIAVERDA_CATEGORIE_URL = "https://www.viaverda.be/Detail/category/marktberichten
 DEINZE_KIPPEN_URL = "https://www.deinze.be/kippenprijzen"
 VOEDERSDEGRAVE_VARKENS_URL = "https://www.voedersdegrave.be/varkensprijzen"
 LANDBOUWLEVEN_EIEREN_URL = "https://www.landbouwleven.be/markten/eieren/kruishoutem-scharreleieren-handelsnoteringen-bruine-eieren-57-5-g-m"
+LANDBOUWLEVEN_RUNDVEE_URL = "https://www.landbouwleven.be/markten/rundvee/coevia-gras-koeien-levende"
+LANDBOUWLEVEN_MELK_URL = "https://www.landbouwleven.be/markten/melkvee-en-zuivel/eu-belgie-rauwe-melk"
 
 CATEGORIEEN = {
     "🌾 Granen": {
@@ -54,7 +56,7 @@ CATEGORIEEN = {
         "tickers": {},
     },
     "🐖 Vee & Pluimvee": {
-        "query": "(varkensprijs OR biggenprijs OR eierprijs OR pluimveeprijs OR vleesvarkens OR Vlaamse biggenprijs) markt",
+        "query": "(varkensprijs OR biggenprijs OR eierprijs OR pluimveeprijs OR vleesvarkens OR Vlaamse biggenprijs OR melkprijs OR rundveeprijs) markt",
         "tickers": {},
     },
 }
@@ -218,29 +220,65 @@ def haal_varkensprijzen_op():
         return {}
 
 
-# ---------- Eierprijzen (Landbouwleven — Kruisem-notering) ----------
+# ---------- Generieke "Prijs op DATUM" scraper (Landbouwleven) ----------
+
+def _scrape_landbouwleven_prijs(url, spanpatroon=None):
+    """
+    Scrapt een Landbouwleven-marktpagina met het vaste 'Prijs op DATUM' formaat.
+    spanpatroon: optionele regex om een prijsrange (bv. '5,30 – 6,45') te herkennen
+    i.p.v. een enkele prijs.
+    """
+    try:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(resp.text, "html.parser")
+        regels = [r.strip() for r in soup.get_text("\n").split("\n") if r.strip()]
+
+        for i, regel in enumerate(regels):
+            match_datum = re.match(r"Prijs op ([\d/\s–-]+)", regel)
+            if not match_datum:
+                continue
+
+            datum = match_datum.group(1).strip()
+            resultaat = {"datum": datum}
+
+            for volgende in regels[i + 1:i + 5]:
+                if spanpatroon:
+                    m = re.search(spanpatroon, volgende)
+                    if m:
+                        resultaat["van"] = m.group(1).replace(",", ".")
+                        resultaat["tot"] = m.group(2).replace(",", ".")
+                else:
+                    if "prijs" not in resultaat:
+                        m = re.search(r"([\d,]+)\s*€", volgende)
+                        if m:
+                            resultaat["prijs"] = m.group(1).replace(",", ".")
+                m2 = re.search(r"([+-][\d,]+)\s*%", volgende)
+                if m2:
+                    resultaat["verandering_pct"] = m2.group(1).replace(",", ".")
+
+            if "prijs" in resultaat or "van" in resultaat:
+                return resultaat
+
+        print(f"Landbouwleven ({url}): geen prijs gevonden op de pagina.")
+        return {}
+    except Exception as e:
+        print(f"Landbouwleven-scrape ({url}) mislukt: {e}")
+        return {}
+
 
 def haal_eierprijs_op():
     """Scrapt de actuele bruine-scharrelei-prijs (57,5g M, Kruisem) van Landbouwleven."""
-    try:
-        resp = requests.get(LANDBOUWLEVEN_EIEREN_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(resp.text, "html.parser")
-        tekst = soup.get_text("\n")
+    return _scrape_landbouwleven_prijs(LANDBOUWLEVEN_EIEREN_URL)
 
-        match = re.search(r"Prijs op (\d{2}/\d{2}/\d{4})\s*\n+\s*([\d,]+)€\s*([+-][\d,]+)\s*%", tekst)
-        if not match:
-            print("Eierprijs (Landbouwleven): geen prijs gevonden op de pagina.")
-            return {}
 
-        datum, prijs, verandering_pct = match.groups()
-        return {
-            "datum": datum,
-            "prijs": prijs.replace(",", "."),
-            "verandering_pct": verandering_pct.replace(",", "."),
-        }
-    except Exception as e:
-        print(f"Eierprijs-scrape (Landbouwleven) mislukt: {e}")
-        return {}
+def haal_rundveeprijs_op():
+    """Scrapt de actuele prijs voor vette koeien (levend gewicht) van Landbouwleven/Coevia."""
+    return _scrape_landbouwleven_prijs(LANDBOUWLEVEN_RUNDVEE_URL, spanpatroon=r"([\d,]+)\s*[–-]\s*([\d,]+)€")
+
+
+def haal_melkprijs_op():
+    """Scrapt de actuele Belgische rauwe-melkprijs van Landbouwleven."""
+    return _scrape_landbouwleven_prijs(LANDBOUWLEVEN_MELK_URL)
 
 
 # ---------- Slachtpluimveeprijzen (Stad Deinze) ----------
@@ -379,7 +417,21 @@ def main():
             print(f"Eierprijs-resultaat: {eieren if eieren else 'LEEG/MISLUKT'}")
             if eieren:
                 titel = f"Bruine scharreleieren 57,5g (Kruisem, {eieren.get('datum', '?')})"
-                regel = [f"€{eieren.get('prijs', '?')} /100 stuks ({eieren.get('verandering_pct', '?')}%)"]
+                regel = [f"€{eieren.get('prijs', '?')} /100 stuks ({eieren.get('verandering_pct', '0')}%)"]
+                extra_secties.append((titel, regel))
+
+            rundvee = haal_rundveeprijs_op()
+            print(f"Rundveeprijs-resultaat: {rundvee if rundvee else 'LEEG/MISLUKT'}")
+            if rundvee:
+                titel = f"Vette koeien, levend gewicht (Coevia, {rundvee.get('datum', '?')})"
+                regel = [f"€{rundvee.get('van', '?')} – €{rundvee.get('tot', '?')} /kg"]
+                extra_secties.append((titel, regel))
+
+            melk = haal_melkprijs_op()
+            print(f"Melkprijs-resultaat: {melk if melk else 'LEEG/MISLUKT'}")
+            if melk:
+                titel = f"Rauwe melk BE ({melk.get('datum', '?')})"
+                regel = [f"€{melk.get('prijs', '?')} /100kg ({melk.get('verandering_pct', '0')}%)"]
                 extra_secties.append((titel, regel))
 
             kippen = haal_kippenprijzen_op()
