@@ -2,9 +2,12 @@ name: Dagelijkse Actua Bot
 
 on:
   schedule:
-    - cron: '0 11 * * *'   # 09:00 Belgische tijd (zomertijd, UTC+2)
-    - cron: '0 19 * * *'  # 15:00 Belgische tijd (zomertijd, UTC+2)
+    - cron: '0 7 * * *'
+    - cron: '0 13 * * *'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   news:
@@ -29,3 +32,11 @@ jobs:
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
         run: python bot_news.py
+
+      - name: Commit bijgewerkte nieuws-staat
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add laatste_nieuws.json
+          git diff --staged --quiet || git commit -m "Update laatste nieuws-staat"
+          git push
