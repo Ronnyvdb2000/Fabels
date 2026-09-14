@@ -2,10 +2,14 @@
 bot_news.py — Dagelijkse actualiteitenbot voor granen, olie, kunstmest, oorlog/geopolitiek
 en vee/pluimveeprijzen. Stuurt één Telegram-bericht per categorie naar een apart nieuwskanaal
 (NEWS_TELEGRAM_CHAT_ID), gescheiden van de aandelen-/tradingbots. Geen CSV-logging.
+
+Bij een lege nieuwscategorie wordt het laatst gekende nieuws opnieuw getoond (opgeslagen in
+laatste_nieuws.json, dat de workflow zelf terug commit naar de repo).
 """
 
 import os
 import re
+import json
 import time
 import smtplib
 import requests
@@ -29,14 +33,12 @@ EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
 MAX_ITEMS_PER_CATEGORIE = 5
 NIEUWS_VENSTER_UUR = 48
+STATE_FILE = "laatste_nieuws.json"
 
 FEGRA_URL = "https://fegra.be/home/agriculturalprices"
 VIAVERDA_CATEGORIE_URL = "https://www.viaverda.be/Detail/category/marktberichten"
 DEINZE_KIPPEN_URL = "https://www.deinze.be/kippenprijzen"
 VOEDERSDEGRAVE_VARKENS_URL = "https://www.voedersdegrave.be/varkensprijzen"
-LANDBOUWLEVEN_EIEREN_URL = "https://www.landbouwleven.be/markten/eieren/kruishoutem-scharreleieren-handelsnoteringen-bruine-eieren-57-5-g-m"
-LANDBOUWLEVEN_RUNDVEE_URL = "https://www.landbouwleven.be/markten/rundvee/coevia-gras-koeien-levende"
-LANDBOUWLEVEN_MELK_URL = "https://www.landbouwleven.be/markten/melkvee-en-zuivel/eu-belgie-rauwe-melk"
 
 CATEGORIEEN = {
     "🌾 Granen": {
@@ -62,6 +64,21 @@ CATEGORIEEN = {
 }
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=nl&gl=BE&ceid=BE:nl"
+
+
+# ---------- Staat bijhouden (laatst gekende nieuws) ----------
+
+def laad_vorige_staat():
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def bewaar_staat(staat):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(staat, f, ensure_ascii=False, indent=2)
 
 
 # ---------- Nieuws ophalen ----------
@@ -220,70 +237,6 @@ def haal_varkensprijzen_op():
         return {}
 
 
-# ---------- Generieke "Prijs op DATUM" scraper (Landbouwleven) ----------
-
-def _scrape_landbouwleven_prijs(url, spanpatroon=None):
-    """
-    Scrapt een Landbouwleven-marktpagina met het vaste 'Prijs op DATUM' formaat.
-    spanpatroon: optionele regex om een prijsrange (bv. '5,30 – 6,45') te herkennen
-    i.p.v. een enkele prijs.
-    """
-    try:
-        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(resp.text, "html.parser")
-        regels = [r.strip() for r in soup.get_text("\n").split("\n") if r.strip()]
-
-        if not any("Prijs op" in r for r in regels):
-            print(f"Diagnose {url}: 'Prijs op' NIET aanwezig in ruwe HTML — lengte={len(resp.text)}, status={resp.status_code}")
-
-        for i, regel in enumerate(regels):
-            match_datum = re.match(r"Prijs op ([\d/\s–-]+)", regel)
-            if not match_datum:
-                continue
-
-            datum = match_datum.group(1).strip()
-            resultaat = {"datum": datum}
-
-            for volgende in regels[i + 1:i + 5]:
-                if spanpatroon:
-                    m = re.search(spanpatroon, volgende)
-                    if m:
-                        resultaat["van"] = m.group(1).replace(",", ".")
-                        resultaat["tot"] = m.group(2).replace(",", ".")
-                else:
-                    if "prijs" not in resultaat:
-                        m = re.search(r"([\d,]+)\s*€", volgende)
-                        if m:
-                            resultaat["prijs"] = m.group(1).replace(",", ".")
-                m2 = re.search(r"([+-][\d,]+)\s*%", volgende)
-                if m2:
-                    resultaat["verandering_pct"] = m2.group(1).replace(",", ".")
-
-            if "prijs" in resultaat or "van" in resultaat:
-                return resultaat
-
-        print(f"Landbouwleven ({url}): geen prijs gevonden op de pagina.")
-        return {}
-    except Exception as e:
-        print(f"Landbouwleven-scrape ({url}) mislukt: {e}")
-        return {}
-
-
-def haal_eierprijs_op():
-    """Scrapt de actuele bruine-scharrelei-prijs (57,5g M, Kruisem) van Landbouwleven."""
-    return _scrape_landbouwleven_prijs(LANDBOUWLEVEN_EIEREN_URL)
-
-
-def haal_rundveeprijs_op():
-    """Scrapt de actuele prijs voor vette koeien (levend gewicht) van Landbouwleven/Coevia."""
-    return _scrape_landbouwleven_prijs(LANDBOUWLEVEN_RUNDVEE_URL, spanpatroon=r"([\d,]+)\s*[–-]\s*([\d,]+)€")
-
-
-def haal_melkprijs_op():
-    """Scrapt de actuele Belgische rauwe-melkprijs van Landbouwleven."""
-    return _scrape_landbouwleven_prijs(LANDBOUWLEVEN_MELK_URL)
-
-
 # ---------- Slachtpluimveeprijzen (Stad Deinze) ----------
 
 def haal_kippenprijzen_op():
@@ -305,7 +258,7 @@ def haal_kippenprijzen_op():
 
 # ---------- Berichten opbouwen ----------
 
-def bouw_categorie_bericht(naam, artikels, prijzen, extra_secties=None):
+def bouw_categorie_bericht(naam, artikels, prijzen, extra_secties=None, is_oud_nieuws=False):
     """extra_secties: lijst van (titel, [regels]) tuples, elk als eigen blok toegevoegd."""
     regels = [f"<b>{naam}</b>", ""]
 
@@ -324,6 +277,8 @@ def bouw_categorie_bericht(naam, artikels, prijzen, extra_secties=None):
             regels.append("")
 
     if artikels:
+        if is_oud_nieuws:
+            regels.append("<i>Geen nieuwe update — laatst gekende nieuws:</i>")
         for a in artikels:
             bron_str = f" — {a['bron']}" if a["bron"] else ""
             regels.append(f"• <a href='{a['link']}'>{a['titel']}</a>{bron_str}")
@@ -386,9 +341,22 @@ def stuur_email_samenvatting(categorie_berichten: dict):
 
 def main():
     categorie_berichten = {}
+    vorige_staat = laad_vorige_staat()
+    nieuwe_staat = {}
 
     for naam, config in CATEGORIEEN.items():
         artikels = haal_nieuws_op(config["query"])
+        is_oud = False
+
+        if artikels:
+            nieuwe_staat[naam] = [
+                {"titel": a["titel"], "link": a["link"], "bron": a["bron"]} for a in artikels
+            ]
+        elif naam in vorige_staat and vorige_staat[naam]:
+            artikels = vorige_staat[naam]
+            nieuwe_staat[naam] = vorige_staat[naam]
+            is_oud = True
+
         prijzen = haal_futures_prijzen_op(config["tickers"])
         extra_secties = []
 
@@ -416,41 +384,21 @@ def main():
                 titel = f"Varkens/Biggen (Voedersdegrave, week {varkens.get('week', '?')}, {varkens.get('datum', '?')})"
                 extra_secties.append((titel, regels))
 
-            eieren = haal_eierprijs_op()
-            print(f"Eierprijs-resultaat: {eieren if eieren else 'LEEG/MISLUKT'}")
-            if eieren:
-                titel = f"Bruine scharreleieren 57,5g (Kruisem, {eieren.get('datum', '?')})"
-                regel = [f"€{eieren.get('prijs', '?')} /100 stuks ({eieren.get('verandering_pct', '0')}%)"]
-                extra_secties.append((titel, regel))
-
-            rundvee = haal_rundveeprijs_op()
-            print(f"Rundveeprijs-resultaat: {rundvee if rundvee else 'LEEG/MISLUKT'}")
-            if rundvee:
-                titel = f"Vette koeien, levend gewicht (Coevia, {rundvee.get('datum', '?')})"
-                regel = [f"€{rundvee.get('van', '?')} – €{rundvee.get('tot', '?')} /kg"]
-                extra_secties.append((titel, regel))
-
-            melk = haal_melkprijs_op()
-            print(f"Melkprijs-resultaat: {melk if melk else 'LEEG/MISLUKT'}")
-            if melk:
-                titel = f"Rauwe melk BE ({melk.get('datum', '?')})"
-                regel = [f"€{melk.get('prijs', '?')} /100kg ({melk.get('verandering_pct', '0')}%)"]
-                extra_secties.append((titel, regel))
-
             kippen = haal_kippenprijzen_op()
             print(f"Kippenprijzen-resultaat: {kippen if kippen else 'LEEG/MISLUKT'}")
             if kippen:
                 regels = [f"{k}: {v}" for k, v in kippen.items()]
                 extra_secties.append(("Slachtpluimvee (Deinze)", regels))
 
-        bericht = bouw_categorie_bericht(naam, artikels, prijzen, extra_secties)
+        bericht = bouw_categorie_bericht(naam, artikels, prijzen, extra_secties, is_oud)
         categorie_berichten[naam] = bericht
 
         verzonden = stuur_telegram(bericht)
-        print(f"{naam}: {'verzonden' if verzonden else 'MISLUKT'} ({len(artikels)} artikels)")
+        print(f"{naam}: {'verzonden' if verzonden else 'MISLUKT'} ({len(artikels)} artikels{', OUD' if is_oud else ''})")
 
         time.sleep(1)
 
+    bewaar_staat(nieuwe_staat)
     stuur_email_samenvatting(categorie_berichten)
 
 
