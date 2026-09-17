@@ -54,11 +54,11 @@ CATEGORIEEN = {
         "tickers": {},
     },
     "⚔️ Oorlog & geopolitiek": {
-        "query": "(oorlog OR Oekraïne OR Rusland OR Gaza OR Midden-Oosten OR sancties OR conflict) (grondstoffen OR olie OR graan OR energie OR export OR handel)",
+        "query": "(oorlog OR war OR Oekraïne OR Rusland OR Gaza OR Midden-Oosten OR sancties OR conflict) (grondstoffen OR olie OR graan OR energie OR export OR handel)",
         "tickers": {},
     },
     "🐖 Vee & Pluimvee": {
-        "query": "(varkensprijs OR biggenprijs OR eierprijs OR pluimveeprijs OR vleesvarkens OR Vlaamse biggenprijs OR melkprijs OR rundveeprijs) markt",
+        "query": "(varkensprijs OR biggenprijs OR eierprijs OR eggs OR pluimveeprijs OR vleesvarkens OR Vlaamse biggenprijs OR melkprijs OR rundveeprijs) markt",
         "tickers": {},
     },
 }
